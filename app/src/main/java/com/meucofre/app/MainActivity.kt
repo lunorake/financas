@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -268,6 +269,18 @@ class MainActivity : ComponentActivity() {
 }
 
 private val chartColors = listOf(Green, Blue, Orange, Color(0xFFC9A0FF), Red, Color(0xFF79D6D1))
+@Composable private fun ReportLine(label: String, value: String, tint: Color = Muted) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
+        Text(value, color = tint, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
 @Composable private fun ReportChart(groups: List<Pair<Double, Double>>) { Canvas(Modifier.fillMaxWidth().height(155.dp)) { for (i in 0..3) drawLine(Border, Offset(0f, size.height * i / 3), Offset(size.width, size.height * i / 3), 1f); val maxV = max(1.0, groups.maxOfOrNull { max(it.first, it.second) } ?: 1.0); fun pathFor(selector: (Pair<Double, Double>) -> Double): Path { val p = Path(); groups.forEachIndexed { i, g -> val x = size.width * i / (groups.size - 1).coerceAtLeast(1); val y = size.height - (selector(g) / maxV).toFloat() * (size.height * .83f) - 6f; if (i == 0) p.moveTo(x, y) else { val prevX = size.width * (i - 1) / (groups.size - 1).coerceAtLeast(1); val prevY = size.height - (selector(groups[i - 1]) / maxV).toFloat() * (size.height * .83f) - 6f; val mid = (prevX + x) / 2; p.cubicTo(mid, prevY, mid, y, x, y) } }; return p }; drawPath(pathFor { it.first }, Green, style = Stroke(3f, cap = StrokeCap.Round)); drawPath(pathFor { it.second }, Red, style = Stroke(3f, cap = StrokeCap.Round)) } }
 @Composable private fun Donut(values: List<Double>) { Canvas(Modifier.size(122.dp)) { val total = values.sum().coerceAtLeast(1.0); var start = -90f; values.forEachIndexed { i, v -> val sweep = (v / total * 360).toFloat(); drawArc(chartColors[i % chartColors.size], start, sweep - 2f, false, topLeft = Offset(8f, 8f), size = Size(size.width - 16f, size.height - 16f), style = Stroke(width = 22f, cap = StrokeCap.Butt)); start += sweep } } }
 
