@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
     Scaffold(containerColor = Bg, bottomBar = {
         NavigationBar(containerColor = Panel, contentColor = Muted, tonalElevation = 0.dp) {
             listOf(Triple("Início", Icons.Filled.Home, "Início"), Triple("Movimentos", Icons.Filled.SwapHoriz, "Movimentos"), Triple("Contas", Icons.Filled.AccountBalanceWallet, "Contas"), Triple("Relatórios", Icons.Filled.Insights, "Relatórios"), Triple("Mais", Icons.Filled.GridView, "Mais")).forEach { (label, icon, destination) ->
-                NavigationBarItem(selected = tab == destination || (destination == "Mais" && tab in listOf("Fixas", "Metas", "Orçamentos", "Segurança", "Notificações")), onClick = { tab = if (destination == "Mais") "Mais" else destination }, icon = { Icon(icon, null) }, label = { Text(label, fontSize = 10.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = GreenDeep, unselectedIconColor = Muted, unselectedTextColor = Muted))
+                NavigationBarItem(selected = tab == destination || (destination == "Mais" && tab in listOf("Fixas", "Metas", "Orçamentos", "Segurança", "Notificações", "Assistente")), onClick = { tab = if (destination == "Mais") "Mais" else destination }, icon = { Icon(icon, null) }, label = { Text(label, fontSize = 10.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = GreenDeep, unselectedIconColor = Muted, unselectedTextColor = Muted))
             }
         }
     }, floatingActionButton = { if (tab in listOf("Início", "Movimentos")) FloatingActionButton(onClick = { editingMove = null; showMove = true }, containerColor = Green, contentColor = Bg, shape = CircleShape) { Icon(Icons.Filled.Add, "Nova movimentação") } }) { padding ->
@@ -183,6 +183,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismissPending = { WalletNotificationStore.removeFirst(context); pendingWalletJson = WalletNotificationStore.firstPending(context) }
                     )
+                    "Assistente" -> FinancialAssistantScreen(month, moves, accounts, recurring, goals, budgets.toMap(), totalBalance, hideBalance)
                     else -> MoreScreen(onSelect = { tab = it }, recurringCount = recurring.size, goalsCount = goals.size, budgetsCount = budgets.size)
                 }
             }
@@ -319,7 +320,7 @@ private val chartColors = listOf(Green, Blue, Orange, Color(0xFFC9A0FF), Red, Co
 @Composable private fun ReportChart(groups: List<Pair<Double, Double>>) { Canvas(Modifier.fillMaxWidth().height(155.dp)) { for (i in 0..3) drawLine(Border, Offset(0f, size.height * i / 3), Offset(size.width, size.height * i / 3), 1f); val maxV = max(1.0, groups.maxOfOrNull { max(it.first, it.second) } ?: 1.0); fun pathFor(selector: (Pair<Double, Double>) -> Double): Path { val p = Path(); groups.forEachIndexed { i, g -> val x = size.width * i / (groups.size - 1).coerceAtLeast(1); val y = size.height - (selector(g) / maxV).toFloat() * (size.height * .83f) - 6f; if (i == 0) p.moveTo(x, y) else { val prevX = size.width * (i - 1) / (groups.size - 1).coerceAtLeast(1); val prevY = size.height - (selector(groups[i - 1]) / maxV).toFloat() * (size.height * .83f) - 6f; val mid = (prevX + x) / 2; p.cubicTo(mid, prevY, mid, y, x, y) } }; return p }; drawPath(pathFor { it.first }, Green, style = Stroke(3f, cap = StrokeCap.Round)); drawPath(pathFor { it.second }, Red, style = Stroke(3f, cap = StrokeCap.Round)) } }
 @Composable private fun Donut(values: List<Double>) { Canvas(Modifier.size(122.dp)) { val total = values.sum().coerceAtLeast(1.0); var start = -90f; values.forEachIndexed { i, v -> val sweep = (v / total * 360).toFloat(); drawArc(chartColors[i % chartColors.size], start, sweep - 2f, false, topLeft = Offset(8f, 8f), size = Size(size.width - 16f, size.height - 16f), style = Stroke(width = 22f, cap = StrokeCap.Butt)); start += sweep } } }
 
-@Composable private fun MoreScreen(onSelect: (String) -> Unit, recurringCount: Int, goalsCount: Int, budgetsCount: Int) { LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { item { Text("Mais ferramentas", fontSize = 24.sp, fontWeight = FontWeight.Bold); Text("Tudo para manter suas finanças organizadas", color = Muted, fontSize = 11.sp) }; item { MoreItem("Contas fixas", "Pagamentos recorrentes e vencimentos", Icons.Filled.EventRepeat, "$recurringCount cadastradas") { onSelect("Fixas") } }; item { MoreItem("Metas financeiras", "Acompanhe suas reservas e objetivos", Icons.Filled.Flag, "$goalsCount metas") { onSelect("Metas") } }; item { MoreItem("Orçamentos", "Limites mensais por categoria", Icons.Filled.PieChart, "$budgetsCount categorias") { onSelect("Orçamentos") } }; item { MoreItem("Importar compras", "Ler notificações da Samsung Wallet", Icons.Filled.NotificationsActive, "Sem API paga") { onSelect("Notificações") } }; item { MoreItem("Segurança e privacidade", "Ocultar saldos e configurar PIN", Icons.Filled.Security, "Proteção local") { onSelect("Segurança") } }; item { Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.padding(17.dp)) { Text("Sobre o Meu Cofre", fontWeight = FontWeight.Bold); Spacer(Modifier.height(5.dp)); Text("Cofre Premium · Controle financeiro pessoal", color = Muted, fontSize = 11.sp); Text("Seus dados ficam armazenados localmente neste aparelho.", color = Muted, fontSize = 11.sp) } } } } }
+@Composable private fun MoreScreen(onSelect: (String) -> Unit, recurringCount: Int, goalsCount: Int, budgetsCount: Int) { LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { item { Text("Mais ferramentas", fontSize = 24.sp, fontWeight = FontWeight.Bold); Text("Tudo para manter suas finanças organizadas", color = Muted, fontSize = 11.sp) }; item { MoreItem("Contas fixas", "Pagamentos recorrentes e vencimentos", Icons.Filled.EventRepeat, "$recurringCount cadastradas") { onSelect("Fixas") } }; item { MoreItem("Metas financeiras", "Acompanhe suas reservas e objetivos", Icons.Filled.Flag, "$goalsCount metas") { onSelect("Metas") } }; item { MoreItem("Orçamentos", "Limites mensais por categoria", Icons.Filled.PieChart, "$budgetsCount categorias") { onSelect("Orçamentos") } }; item { MoreItem("Assistente financeiro", "Orientações com base nos seus lançamentos", Icons.Filled.Lightbulb, "Local e gratuito") { onSelect("Assistente") } }; item { MoreItem("Importar compras", "Ler notificações da Samsung Wallet", Icons.Filled.NotificationsActive, "Sem API paga") { onSelect("Notificações") } }; item { MoreItem("Segurança e privacidade", "Ocultar saldos e configurar PIN", Icons.Filled.Security, "Proteção local") { onSelect("Segurança") } }; item { Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.padding(17.dp)) { Text("Sobre o Meu Cofre", fontWeight = FontWeight.Bold); Spacer(Modifier.height(5.dp)); Text("Cofre Premium · Controle financeiro pessoal", color = Muted, fontSize = 11.sp); Text("Seus dados ficam armazenados localmente neste aparelho.", color = Muted, fontSize = 11.sp) } } } } }
 @Composable private fun WalletImportScreen(
     pendingJson: String?,
     accounts: List<Account>,
@@ -358,6 +359,84 @@ private val chartColors = listOf(Green, Blue, Orange, Color(0xFFC9A0FF), Red, Co
         }
         Text("Privacidade: o Meu Cofre não acessa os dados internos do cartão nem realiza pagamentos. Ele usa apenas o texto que o Android disponibiliza na notificação.", color = Muted, fontSize = 10.sp)
     }
+}
+
+private data class AdviceMessage(val question: String, val answer: String)
+
+private fun financialAnswer(question: String, month: String, moves: List<Move>, recurring: List<Recurring>, goals: List<Goal>, budgets: Map<String, Double>, balance: Double): String {
+    val monthly = moves.filter { it.date.startsWith(month) }
+    val income = monthly.filter { it.type == "Receita" }.sumOf { it.amount }
+    val expense = monthly.filter { it.type == "Despesa" }.sumOf { it.amount }
+    val fixed = recurring.filter { month !in it.paidMonths }.sumOf { it.amount }
+    val categories = monthly.filter { it.type == "Despesa" }.groupBy { it.category }.mapValues { e -> e.value.sumOf { it.amount } }.toList().sortedByDescending { it.second }
+    val q = question.lowercase(Locale.ROOT)
+    val alerts = budgets.mapNotNull { (category, limit) ->
+        val spent = monthly.filter { it.type == "Despesa" && it.category.equals(category, true) }.sumOf { it.amount }
+        when { limit > 0 && spent >= limit -> "$category passou do limite: ${money(spent)} de ${money(limit)}."; limit > 0 && spent >= limit * .8 -> "$category já usou ${(spent / limit * 100).toInt()}% do limite."; else -> null }
+    }
+    return when {
+        q.contains("gastar") || q.contains("disponível") || q.contains("livre") -> "Seu saldo registrado é ${money(balance)}. As contas fixas ainda não marcadas como pagas somam ${money(fixed)}. Reservando esse valor, restariam ${money(balance - fixed)}. É uma estimativa: confira despesas pendentes e lançamentos que ainda não cadastrou antes de decidir."
+        q.contains("econom") || q.contains("guardar") || q.contains("reserva") || q.contains("poupar") -> {
+            val goal = goals.firstOrNull { it.target > it.saved }
+            "Neste mês você registrou ${money(income)} em receitas e ${money(expense)} em despesas; o resultado é ${money(income - expense)}. " +
+                (if (income > expense) "Depois de reservar as contas essenciais, considere separar uma parte do resultado para sua reserva. " else "Como as despesas igualam ou superam as receitas, priorize revisar gastos e vencimentos antes de assumir uma meta de poupança. ") +
+                (goal?.let { "Sua meta '${it.title}' ainda precisa de ${money((it.target - it.saved).coerceAtLeast(0.0))}." } ?: "Você pode cadastrar uma meta para acompanhar seu progresso.")
+        }
+        q.contains("onde") || q.contains("categoria") || q.contains("gasto") -> {
+            val biggest = categories.firstOrNull()
+            if (biggest == null) "Ainda não há despesas registradas neste mês. Cadastre suas compras para eu identificar suas principais categorias."
+            else "Sua maior categoria neste mês é ${biggest.first}, com ${money(biggest.second)}. " + (if (alerts.isNotEmpty()) "Pontos de atenção: ${alerts.joinToString(" ")}" else "Uma forma de economizar é escolher uma categoria flexível e definir um limite realista para o restante do mês.")
+        }
+        q.contains("conta") || q.contains("fixa") || q.contains("vencimento") -> "Você cadastrou ${recurring.size} contas fixas. As que ainda não foram marcadas como pagas somam ${money(fixed)} neste mês. Marque cada conta como paga quando quitar para manter a estimativa atualizada."
+        q.contains("orçamento") || q.contains("limite") -> if (alerts.isEmpty()) "Não identifiquei limites estourados com os dados cadastrados. Defina orçamentos nas categorias mais importantes para receber orientações melhores." else "Atenção a estes orçamentos: ${alerts.joinToString(" ")} Vale pausar compras não essenciais nessas categorias e revisar o restante do mês."
+        else -> "Resumo de ${monthLabel(month)}: receitas ${money(income)}, despesas ${money(expense)} e resultado ${money(income - expense)}. Seu saldo total registrado é ${money(balance)}. " + (if (alerts.isNotEmpty()) "Atenção: ${alerts.joinToString(" ")}" else "Cadastre suas contas fixas e limites por categoria para eu ajudar com mais precisão.")
+    }
+}
+
+@Composable private fun FinancialAssistantScreen(month: String, moves: List<Move>, accounts: List<Account>, recurring: List<Recurring>, goals: List<Goal>, budgets: Map<String, Double>, balance: Double, hidden: Boolean) {
+    var input by remember { mutableStateOf("") }
+    val messages = remember { mutableStateListOf<AdviceMessage>() }
+    val monthly = moves.filter { it.date.startsWith(month) }
+    val income = monthly.filter { it.type == "Receita" }.sumOf { it.amount }
+    val expense = monthly.filter { it.type == "Despesa" }.sumOf { it.amount }
+    val fixed = recurring.filter { month !in it.paidMonths }.sumOf { it.amount }
+    fun ask(question: String) { if (question.isNotBlank()) { messages.add(AdviceMessage(question.trim(), financialAnswer(question, month, moves, recurring, goals, budgets, balance))); input = "" } }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(GreenDeep), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Lightbulb, null, tint = Green, modifier = Modifier.size(26.dp)) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) { Text("Seu assistente financeiro", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Orientações baseadas nos seus registros", color = Muted, fontSize = 11.sp) }
+            Surface(color = GreenDeep, shape = CircleShape) { Text("GRÁTIS", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) }
+        }
+        Surface(color = Card, shape = RoundedCornerShape(22.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Visão do mês", fontWeight = FontWeight.Bold); Text(monthLabel(month), color = Muted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Receitas", if (hidden) "••••" else money(income), Green, Modifier.weight(1f)); AdviceMetric("Despesas", if (hidden) "••••" else money(expense), Red, Modifier.weight(1f)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Saldo total", if (hidden) "••••" else money(balance), Blue, Modifier.weight(1f)); AdviceMetric("Contas a reservar", if (hidden) "••••" else money(fixed), Orange, Modifier.weight(1f)) }
+            }
+        }
+        Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("O que você quer entender?", fontWeight = FontWeight.SemiBold)
+                listOf("Posso gastar R$ 100 hoje?", "Onde estou gastando mais?", "Como posso economizar?", "Quais contas preciso reservar?", "Estou estourando algum orçamento?").forEach { suggestion ->
+                    Surface(Modifier.fillMaxWidth().clickable { ask(suggestion) }, color = Card, shape = RoundedCornerShape(13.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.ChatBubbleOutline, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(9.dp)); Text(suggestion, modifier = Modifier.weight(1f), fontSize = 12.sp); Icon(Icons.Filled.ChevronRight, null, tint = Muted, modifier = Modifier.size(17.dp)) }
+                    }
+                }
+            }
+        }
+        if (messages.isNotEmpty()) {
+            Text("Sua conversa", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            messages.reversed().forEach { message -> Surface(color = Card, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(message.question, color = Green, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Divider(color = Border); Text(message.answer, color = Txt, fontSize = 12.sp, lineHeight = 18.sp) } } }
+        }
+        OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Pergunte sobre seu dinheiro...", fontSize = 12.sp, color = Muted) }, trailingIcon = { IconButton(onClick = { ask(input) }) { Icon(Icons.Filled.Send, "Enviar pergunta", tint = Green) } }, shape = RoundedCornerShape(17.dp), colors = fieldColors())
+        Text("Funciona localmente e sem API paga. Esta primeira versão usa regras financeiras e seus lançamentos, não um modelo generativo. As respostas são estimativas e dependem dos dados cadastrados.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable private fun AdviceMetric(label: String, value: String, tint: Color, modifier: Modifier = Modifier) {
+    Surface(modifier, color = Card, shape = RoundedCornerShape(15.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.padding(12.dp)) { Text(label, color = Muted, fontSize = 10.sp); Spacer(Modifier.height(5.dp)); Text(value, color = tint, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
 }
 
 @Composable private fun SecurityScreen(hidden: Boolean, pinEnabled: Boolean, onHide: () -> Unit, onSetupPin: () -> Unit) { Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Segurança", fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("Privacidade dos seus dados", color = Muted, fontSize = 11.sp); MoreItem("Ocultar valores", "Esconda os saldos nas telas", Icons.Filled.Visibility, if (hidden) "Ativado" else "Desativado", onHide); MoreItem("PIN de acesso", "Bloqueio simples ao abrir o app", Icons.Filled.Lock, if (pinEnabled) "Configurado" else "Não configurado", onSetupPin); Surface(color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Text("A proteção por PIN é um bloqueio local básico. Ela não substitui criptografia de banco de dados nem autenticação bancária.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(16.dp)) } } }
