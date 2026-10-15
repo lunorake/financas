@@ -1,7 +1,12 @@
 package com.meucofre.app
 
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
@@ -99,6 +104,7 @@ class MainActivity : ComponentActivity() {
     val recurring = remember { mutableStateListOf<Recurring>().apply { addAll(loadRecurring(prefs)) } }
     val goals = remember { mutableStateListOf<Goal>().apply { addAll(loadGoals(prefs)) } }
     val budgets = remember { mutableStateMapOf<String, Double>().apply { putAll(loadBudgets(prefs)) } }
+    var pendingWalletJson by remember { mutableStateOf(WalletNotificationStore.firstPending(context)) }
     var pinHash by remember { mutableStateOf(prefs.getString("pin_hash", "") ?: "") }
     var unlocked by remember { mutableStateOf(pinHash.isEmpty()) }
     var hideBalance by remember { mutableStateOf(prefs.getBoolean("hide_balance", false)) }
@@ -119,6 +125,20 @@ class MainActivity : ComponentActivity() {
         prefs.edit().putString("movimentos", movesToJson(moves)).putString("contas", accountsToJson(accounts)).putString("recorrencias", recurringToJson(recurring)).putString("metas", goalsToJson(goals)).putString("orcamentos", budgetsToJson(budgets)).putBoolean("ocultar_saldo", hideBalance).putString("pin_hash", pinHash).apply()
     }
     LaunchedEffect(moves.toList(), accounts.toList(), recurring.toList(), goals.toList(), budgets.toMap(), hideBalance, pinHash) { persist() }
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                pendingWalletJson = WalletNotificationStore.firstPending(context)
+            }
+        }
+        val filterIntent = IntentFilter(WalletNotificationStore.ACTION)
+        if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filterIntent, Context.RECEIVER_NOT_EXPORTED)
+        else {
+            @Suppress("DEPRECATION")
+            context.registerReceiver(receiver, filterIntent)
+        }
+        onDispose { try { context.unregisterReceiver(receiver) } catch (_: Exception) {} }
+    }
     BackHandler(enabled = tab != "Início") { tab = "Início" }
     if (!unlocked) {
         PinGate(onUnlock = { entered -> if (sha(entered) == pinHash) { unlocked = true; true } else false })
@@ -131,7 +151,7 @@ class MainActivity : ComponentActivity() {
     Scaffold(containerColor = Bg, bottomBar = {
         NavigationBar(containerColor = Panel, contentColor = Muted, tonalElevation = 0.dp) {
             listOf(Triple("Início", Icons.Filled.Home, "Início"), Triple("Movimentos", Icons.Filled.SwapHoriz, "Movimentos"), Triple("Contas", Icons.Filled.AccountBalanceWallet, "Contas"), Triple("Relatórios", Icons.Filled.Insights, "Relatórios"), Triple("Mais", Icons.Filled.GridView, "Mais")).forEach { (label, icon, destination) ->
-                NavigationBarItem(selected = tab == destination || (destination == "Mais" && tab in listOf("Fixas", "Metas", "Orçamentos", "Segurança")), onClick = { tab = if (destination == "Mais") "Mais" else destination }, icon = { Icon(icon, null) }, label = { Text(label, fontSize = 10.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = GreenDeep, unselectedIconColor = Muted, unselectedTextColor = Muted))
+                NavigationBarItem(selected = tab == destination || (destination == "Mais" && tab in listOf("Fixas", "Metas", "Orçamentos", "Segurança", "Notificações")), onClick = { tab = if (destination == "Mais") "Mais" else destination }, icon = { Icon(icon, null) }, label = { Text(label, fontSize = 10.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = GreenDeep, unselectedIconColor = Muted, unselectedTextColor = Muted))
             }
         }
     }, floatingActionButton = { if (tab in listOf("Início", "Movimentos")) FloatingActionButton(onClick = { editingMove = null; showMove = true }, containerColor = Green, contentColor = Bg, shape = CircleShape) { Icon(Icons.Filled.Add, "Nova movimentação") } }) { padding ->
@@ -148,6 +168,21 @@ class MainActivity : ComponentActivity() {
                     "Metas" -> GoalsScreen(goals, hideBalance, onAdd = { editingGoal = null; showGoal = true }, onEdit = { editingGoal = it; showGoal = true }, onDelete = { g -> goals.removeAll { it.id == g.id } })
                     "Orçamentos" -> BudgetsScreen(budgets, month, moves, hideBalance, onAdd = { showBudget = true }, onDelete = { budgets.remove(it) })
                     "Segurança" -> SecurityScreen(hideBalance, pinHash.isNotEmpty(), onHide = { hideBalance = !hideBalance }, onSetupPin = { showSecurity = true })
+                    "Notificações" -> WalletImportScreen(
+                        pendingJson = pendingWalletJson,
+                        accounts = accounts,
+                        onEnable = { try { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) { toast = "Não foi possível abrir as configurações de notificações." } },
+                        onImport = { title, amount, account ->
+                            val parsed = parseMoney(amount)
+                            if (parsed != null && title.isNotBlank() && account.isNotBlank()) {
+                                moves.add(0, Move(title = title, amount = parsed, type = "Despesa", category = "Compras", date = today(), account = account))
+                                WalletNotificationStore.removeFirst(context)
+                                pendingWalletJson = WalletNotificationStore.firstPending(context)
+                                toast = "Compra adicionada ao Meu Cofre."
+                            } else toast = "Confira a descrição e informe um valor válido."
+                        },
+                        onDismissPending = { WalletNotificationStore.removeFirst(context); pendingWalletJson = WalletNotificationStore.firstPending(context) }
+                    )
                     else -> MoreScreen(onSelect = { tab = it }, recurringCount = recurring.size, goalsCount = goals.size, budgetsCount = budgets.size)
                 }
             }
@@ -284,7 +319,47 @@ private val chartColors = listOf(Green, Blue, Orange, Color(0xFFC9A0FF), Red, Co
 @Composable private fun ReportChart(groups: List<Pair<Double, Double>>) { Canvas(Modifier.fillMaxWidth().height(155.dp)) { for (i in 0..3) drawLine(Border, Offset(0f, size.height * i / 3), Offset(size.width, size.height * i / 3), 1f); val maxV = max(1.0, groups.maxOfOrNull { max(it.first, it.second) } ?: 1.0); fun pathFor(selector: (Pair<Double, Double>) -> Double): Path { val p = Path(); groups.forEachIndexed { i, g -> val x = size.width * i / (groups.size - 1).coerceAtLeast(1); val y = size.height - (selector(g) / maxV).toFloat() * (size.height * .83f) - 6f; if (i == 0) p.moveTo(x, y) else { val prevX = size.width * (i - 1) / (groups.size - 1).coerceAtLeast(1); val prevY = size.height - (selector(groups[i - 1]) / maxV).toFloat() * (size.height * .83f) - 6f; val mid = (prevX + x) / 2; p.cubicTo(mid, prevY, mid, y, x, y) } }; return p }; drawPath(pathFor { it.first }, Green, style = Stroke(3f, cap = StrokeCap.Round)); drawPath(pathFor { it.second }, Red, style = Stroke(3f, cap = StrokeCap.Round)) } }
 @Composable private fun Donut(values: List<Double>) { Canvas(Modifier.size(122.dp)) { val total = values.sum().coerceAtLeast(1.0); var start = -90f; values.forEachIndexed { i, v -> val sweep = (v / total * 360).toFloat(); drawArc(chartColors[i % chartColors.size], start, sweep - 2f, false, topLeft = Offset(8f, 8f), size = Size(size.width - 16f, size.height - 16f), style = Stroke(width = 22f, cap = StrokeCap.Butt)); start += sweep } } }
 
-@Composable private fun MoreScreen(onSelect: (String) -> Unit, recurringCount: Int, goalsCount: Int, budgetsCount: Int) { LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { item { Text("Mais ferramentas", fontSize = 24.sp, fontWeight = FontWeight.Bold); Text("Tudo para manter suas finanças organizadas", color = Muted, fontSize = 11.sp) }; item { MoreItem("Contas fixas", "Pagamentos recorrentes e vencimentos", Icons.Filled.EventRepeat, "$recurringCount cadastradas") { onSelect("Fixas") } }; item { MoreItem("Metas financeiras", "Acompanhe suas reservas e objetivos", Icons.Filled.Flag, "$goalsCount metas") { onSelect("Metas") } }; item { MoreItem("Orçamentos", "Limites mensais por categoria", Icons.Filled.PieChart, "$budgetsCount categorias") { onSelect("Orçamentos") } }; item { MoreItem("Segurança e privacidade", "Ocultar saldos e configurar PIN", Icons.Filled.Security, "Proteção local") { onSelect("Segurança") } }; item { Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.padding(17.dp)) { Text("Sobre o Meu Cofre", fontWeight = FontWeight.Bold); Spacer(Modifier.height(5.dp)); Text("Cofre Premium · Controle financeiro pessoal", color = Muted, fontSize = 11.sp); Text("Seus dados ficam armazenados localmente neste aparelho.", color = Muted, fontSize = 11.sp) } } } } }
+@Composable private fun MoreScreen(onSelect: (String) -> Unit, recurringCount: Int, goalsCount: Int, budgetsCount: Int) { LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { item { Text("Mais ferramentas", fontSize = 24.sp, fontWeight = FontWeight.Bold); Text("Tudo para manter suas finanças organizadas", color = Muted, fontSize = 11.sp) }; item { MoreItem("Contas fixas", "Pagamentos recorrentes e vencimentos", Icons.Filled.EventRepeat, "$recurringCount cadastradas") { onSelect("Fixas") } }; item { MoreItem("Metas financeiras", "Acompanhe suas reservas e objetivos", Icons.Filled.Flag, "$goalsCount metas") { onSelect("Metas") } }; item { MoreItem("Orçamentos", "Limites mensais por categoria", Icons.Filled.PieChart, "$budgetsCount categorias") { onSelect("Orçamentos") } }; item { MoreItem("Importar compras", "Ler notificações da Samsung Wallet", Icons.Filled.NotificationsActive, "Sem API paga") { onSelect("Notificações") } }; item { MoreItem("Segurança e privacidade", "Ocultar saldos e configurar PIN", Icons.Filled.Security, "Proteção local") { onSelect("Segurança") } }; item { Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.padding(17.dp)) { Text("Sobre o Meu Cofre", fontWeight = FontWeight.Bold); Spacer(Modifier.height(5.dp)); Text("Cofre Premium · Controle financeiro pessoal", color = Muted, fontSize = 11.sp); Text("Seus dados ficam armazenados localmente neste aparelho.", color = Muted, fontSize = 11.sp) } } } } }
+@Composable private fun WalletImportScreen(
+    pendingJson: String?,
+    accounts: List<Account>,
+    onEnable: () -> Unit,
+    onImport: (String, String, String) -> Unit,
+    onDismissPending: () -> Unit
+) {
+    val pending = remember(pendingJson) { try { pendingJson?.let { JSONObject(it) } } catch (_: Exception) { null } }
+    var title by remember(pendingJson) { mutableStateOf(pending?.optString("text")?.takeIf { it.isNotBlank() } ?: pending?.optString("title", "Compra Samsung Wallet")?.takeIf { it.isNotBlank() } ?: "Compra Samsung Wallet") }
+    var amount by remember(pendingJson) { mutableStateOf(pending?.optString("amount", "") ?: "") }
+    var account by remember { mutableStateOf(accounts.firstOrNull()?.id ?: "") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Importação por notificação", fontSize = 23.sp, fontWeight = FontWeight.Bold)
+        Text("O Meu Cofre pode ler notificações autorizadas no Android. A leitura funciona somente quando a Samsung Wallet e o emissor disponibilizam o conteúdo da compra.", color = Muted, fontSize = 12.sp)
+        Surface(color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("1. Ative o acesso às notificações", fontWeight = FontWeight.SemiBold)
+                Text("Nas configurações do Android, habilite o acesso do Meu Cofre às notificações. Essa permissão permite que o app leia notificações do aparelho; os dados ficam armazenados localmente.", color = Muted, fontSize = 11.sp)
+                Button(onClick = onEnable, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Bg)) { Text("Abrir configurações") }
+            }
+        }
+        Surface(color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("2. Compra detectada", fontWeight = FontWeight.SemiBold)
+                if (pending == null) {
+                    Text("Ainda não há uma notificação de compra aguardando confirmação. Faça uma compra de teste ou aguarde uma notificação da Samsung Wallet.", color = Muted, fontSize = 12.sp)
+                } else {
+                    Text("Conteúdo recebido: ${pending.optString("text", "").ifBlank { "A notificação não trouxe uma descrição legível." }}", color = Muted, fontSize = 11.sp)
+                    Field(title, { title = it }, "Estabelecimento / descrição")
+                    Field(amount, { amount = it }, "Valor da compra (R$)", KeyboardType.Decimal)
+                    ChoiceRow("Conta de destino", accounts.map { it.name }, accounts.firstOrNull { it.id == account }?.name ?: "") { selected -> account = accounts.firstOrNull { it.name == selected }?.id ?: account }
+                    Button(onClick = { onImport(title, amount, account) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Bg)) { Text("Confirmar e adicionar despesa") }
+                    TextButton(onClick = onDismissPending) { Text("Ignorar esta notificação", color = Red) }
+                }
+            }
+        }
+        Text("Privacidade: o Meu Cofre não acessa os dados internos do cartão nem realiza pagamentos. Ele usa apenas o texto que o Android disponibiliza na notificação.", color = Muted, fontSize = 10.sp)
+    }
+}
+
 @Composable private fun SecurityScreen(hidden: Boolean, pinEnabled: Boolean, onHide: () -> Unit, onSetupPin: () -> Unit) { Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Segurança", fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("Privacidade dos seus dados", color = Muted, fontSize = 11.sp); MoreItem("Ocultar valores", "Esconda os saldos nas telas", Icons.Filled.Visibility, if (hidden) "Ativado" else "Desativado", onHide); MoreItem("PIN de acesso", "Bloqueio simples ao abrir o app", Icons.Filled.Lock, if (pinEnabled) "Configurado" else "Não configurado", onSetupPin); Surface(color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Text("A proteção por PIN é um bloqueio local básico. Ela não substitui criptografia de banco de dados nem autenticação bancária.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(16.dp)) } } }
 
 @Composable private fun MoreItem(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, trailing: String, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().clickable { onClick() }, color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(GreenDeep), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Green) }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, color = Muted, fontSize = 10.sp) }; Text(trailing, color = Green, fontSize = 10.sp); Icon(Icons.Filled.ChevronRight, null, tint = Muted) } } }
