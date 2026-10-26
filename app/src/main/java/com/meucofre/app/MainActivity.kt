@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -56,18 +57,18 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.max
 
-private val Bg = Color(0xFF0B120E)
-private val Panel = Color(0xFF141F18)
-private val Card = Color(0xFF1B2A20)
-private val Card2 = Color(0xFF203329)
-private val Green = Color(0xFF70E5A0)
-private val GreenDeep = Color(0xFF294D37)
-private val Red = Color(0xFFFF8585)
-private val Blue = Color(0xFF83BDFF)
-private val Orange = Color(0xFFFFC078)
-private val Txt = Color(0xFFF0F5F1)
-private val Muted = Color(0xFF9EADA2)
-private val Border = Color(0xFF29392F)
+private val Bg = Color(0xFFF5F6FB)
+private val Panel = Color(0xFFFFFFFF)
+private val Card = Color(0xFFF0F1FF)
+private val Card2 = Color(0xFFE5E8F5)
+private val Green = Color(0xFF6558E8)
+private val GreenDeep = Color(0xFFE9E6FF)
+private val Red = Color(0xFFD94F70)
+private val Blue = Color(0xFF3478D4)
+private val Orange = Color(0xFFC17A19)
+private val Txt = Color(0xFF20243A)
+private val Muted = Color(0xFF737B91)
+private val Border = Color(0xFFE1E4EF)
 private val localeBR = Locale("pt", "BR")
 
 private fun money(v: Double): String = NumberFormat.getCurrencyInstance(localeBR).format(v)
@@ -80,10 +81,11 @@ private fun sha(s: String): String = MessageDigest.getInstance("SHA-256").digest
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.rgb(11, 18, 14)
-        window.navigationBarColor = android.graphics.Color.rgb(11, 18, 14)
+        window.statusBarColor = android.graphics.Color.rgb(245, 246, 251)
+        window.navigationBarColor = android.graphics.Color.rgb(255, 255, 255)
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Green, onPrimary = Bg, background = Bg, surface = Panel, onSurface = Txt, secondary = Blue)) {
+            MaterialTheme(colorScheme = lightColorScheme(primary = Green, onPrimary = Color.White, background = Bg, onBackground = Txt, surface = Panel, onSurface = Txt, secondary = Blue, error = Red)) {
                 CofreApp(applicationContext)
             }
         }
@@ -355,35 +357,61 @@ private val chartColors = listOf(Green, Blue, Orange, Color(0xFFC9A0FF), Red, Co
     }
 }
 
-private data class AdviceMessage(val question: String, val answer: String)
+private data class AdviceMessage(val question: String, val answer: String, val title: String = "Análise do seu dinheiro", val severity: String = "info")
 
 private fun financialAnswer(question: String, month: String, moves: List<Move>, recurring: List<Recurring>, goals: List<Goal>, budgets: Map<String, Double>, balance: Double): String {
-    val monthly = moves.filter { it.date.startsWith(month) }
-    val income = monthly.filter { it.type == "Receita" }.sumOf { it.amount }
-    val expense = monthly.filter { it.type == "Despesa" }.sumOf { it.amount }
-    val fixed = recurring.filter { month !in it.paidMonths }.sumOf { it.amount }
-    val categories = monthly.filter { it.type == "Despesa" }.groupBy { it.category }.mapValues { e -> e.value.sumOf { it.amount } }.toList().sortedByDescending { it.second }
-    val q = question.lowercase(Locale.ROOT)
+    val monthMoves = moves.filter { it.date.startsWith(month) }
+    val income = monthMoves.filter { it.type == "Receita" }.sumOf { it.amount }
+    val expense = monthMoves.filter { it.type == "Despesa" }.sumOf { it.amount }
+    val fixedItems = recurring.filter { month !in it.paidMonths }
+    val fixed = fixedItems.sumOf { it.amount }
+    val categories = monthMoves.filter { it.type == "Despesa" }.groupBy { it.category }.mapValues { (_, list) -> list.sumOf { it.amount } }.toList().sortedByDescending { it.second }
+    val normalized = java.text.Normalizer.normalize(question.lowercase(Locale.ROOT), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
     val alerts = budgets.mapNotNull { (category, limit) ->
-        val spent = monthly.filter { it.type == "Despesa" && it.category.equals(category, true) }.sumOf { it.amount }
-        when { limit > 0 && spent >= limit -> "$category passou do limite: ${money(spent)} de ${money(limit)}."; limit > 0 && spent >= limit * .8 -> "$category já usou ${(spent / limit * 100).toInt()}% do limite."; else -> null }
+        val spent = monthMoves.filter { it.type == "Despesa" && it.category.equals(category, true) }.sumOf { it.amount }
+        if (limit > 0 && spent >= limit) "$category: ${money(spent)} de ${money(limit)} (${(spent / limit * 100).toInt()}%)." else if (limit > 0 && spent >= limit * .8) "$category já consumiu ${(spent / limit * 100).toInt()}% do limite." else null
     }
+    val amountMatch = Regex("(?:r\\$\\s*)?([0-9]{1,7}(?:[.,][0-9]{1,2})?)").find(normalized)
+    val rawAmount = amountMatch?.groupValues?.get(1)
+    val requestedAmount = rawAmount?.let { if (it.contains(',')) it.replace(".", "").replace(',', '.').toDoubleOrNull() else it.toDoubleOrNull() }
+    val monthDate = try { SimpleDateFormat("yyyy-MM", Locale.US).parse(month) } catch (_: Exception) { null }
+    val cal = Calendar.getInstance().apply { if (monthDate != null) time = monthDate }
+    val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val currentMonth = currentMonth()
+    val elapsedDays = if (month == currentMonth) Calendar.getInstance().get(Calendar.DAY_OF_MONTH).coerceAtLeast(1) else daysInMonth
+    val projected = if (expense > 0) expense / elapsedDays * daysInMonth else 0.0
+    val previousMonth = shiftMonth(month, -1)
+    val previousExpense = moves.filter { it.date.startsWith(previousMonth) && it.type == "Despesa" }.sumOf { it.amount }
+    val previousIncome = moves.filter { it.date.startsWith(previousMonth) && it.type == "Receita" }.sumOf { it.amount }
+    val categoryMatch = categories.firstOrNull { (cat, _) -> val plain = java.text.Normalizer.normalize(cat.lowercase(Locale.ROOT), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), ""); normalized.contains(plain) }
+    val dueList = fixedItems.sortedBy { it.day }.take(5).joinToString { "${it.title} (${money(it.amount)}, dia ${it.day})" }
     return when {
-        q.contains("gastar") || q.contains("disponível") || q.contains("livre") -> "Seu saldo registrado é ${money(balance)}. As contas fixas ainda não marcadas como pagas somam ${money(fixed)}. Reservando esse valor, restariam ${money(balance - fixed)}. É uma estimativa: confira despesas pendentes e lançamentos que ainda não cadastrou antes de decidir."
-        q.contains("econom") || q.contains("guardar") || q.contains("reserva") || q.contains("poupar") -> {
+        (normalized.contains("posso gastar") || normalized.contains("disponivel") || normalized.contains("livre") || normalized.contains("sobrou")) && requestedAmount != null -> {
+            val spendable = balance - fixed
+            val afterPurchase = spendable - requestedAmount
+            if (afterPurchase >= 0) "Considerando o saldo registrado de ${money(balance)} e ${money(fixed)} em contas fixas ainda não marcadas como pagas, a estimativa livre é ${money(spendable)}. Uma compra de ${money(requestedAmount)} deixaria ${money(afterPurchase)}. Isso só é seguro se todos os gastos e compromissos já estiverem cadastrados."
+            else "Eu teria cautela: o saldo registrado é ${money(balance)} e as contas fixas a reservar somam ${money(fixed)}, deixando uma estimativa de ${money(spendable)}. Uma compra de ${money(requestedAmount)} ultrapassaria essa margem em ${money(-afterPurchase)}."
+        }
+        normalized.contains("compar") || normalized.contains("mes passado") || normalized.contains("aument") || normalized.contains("diminui") -> {
+            val delta = expense - previousExpense
+            val pct = if (previousExpense > 0) kotlin.math.abs(delta / previousExpense * 100) else 0.0
+            "Em ${monthLabel(month)}, você registrou ${money(expense)} em despesas, contra ${money(previousExpense)} em ${monthLabel(previousMonth)}. " + when { previousExpense <= 0 && expense > 0 -> "Não há despesas registradas no mês anterior para uma comparação percentual confiável."; delta > 0 -> "As despesas aumentaram ${money(delta)} (${pct.toInt()}%)."; delta < 0 -> "As despesas caíram ${money(-delta)} (${pct.toInt()}%). Bom sinal — confira se todos os lançamentos foram incluídos."; else -> "As despesas ficaram no mesmo valor registrado." } + " As receitas foram ${money(income)} neste mês e ${money(previousIncome)} no anterior."
+        }
+        categoryMatch != null -> "A categoria ${categoryMatch.first} soma ${money(categoryMatch.second)} em ${monthLabel(month)}. Ela representa ${(if (expense > 0) categoryMatch.second / expense * 100 else 0.0).toInt()}% das despesas registradas do mês. " + (budgets[categoryMatch.first]?.let { limit -> "Seu limite é ${money(limit)}; você usou ${(categoryMatch.second / limit * 100).toInt()}% dele." } ?: "Você ainda não definiu um orçamento específico para essa categoria.")
+        normalized.contains("gasto") || normalized.contains("categoria") || normalized.contains("onde") || normalized.contains("maior despesa") -> {
+            if (categories.isEmpty()) "Ainda não há despesas cadastradas em ${monthLabel(month)}. Quando registrar compras e contas, consigo identificar as categorias que mais pesam."
+            else "Sua maior categoria é ${categories.first().first}, com ${money(categories.first().second)} (${(categories.first().second / expense * 100).toInt()}% das despesas). " + categories.take(3).joinToString("; ") { "${it.first}: ${money(it.second)}" } + ". Eu começaria revisando a maior categoria flexível, sem cortar despesas essenciais às cegas."
+        }
+        normalized.contains("conta") || normalized.contains("fixa") || normalized.contains("vencimento") || normalized.contains("reservar") -> "Você tem ${fixedItems.size} contas fixas ainda não marcadas como pagas, somando ${money(fixed)}. " + if (dueList.isBlank()) "Não há contas pendentes cadastradas." else "Próximas da lista: $dueList." + " Marque como paga depois de quitar para não distorcer a previsão."
+        normalized.contains("orcamento") || normalized.contains("limite") -> if (alerts.isEmpty()) "Com os dados atuais, não identifiquei orçamento acima de 80% do limite. Isso não garante que todos os gastos estejam registrados. Defina limites para as categorias que quer controlar." else "Encontrei estes pontos de atenção: ${alerts.joinToString(" ")} Priorize o que ainda falta pagar e evite assumir novas despesas nessa categoria até revisar o mês."
+        normalized.contains("econom") || normalized.contains("guardar") || normalized.contains("reserva") || normalized.contains("poupar") || normalized.contains("meta") -> {
+            val result = income - expense
             val goal = goals.firstOrNull { it.target > it.saved }
-            "Neste mês você registrou ${money(income)} em receitas e ${money(expense)} em despesas; o resultado é ${money(income - expense)}. " +
-                (if (income > expense) "Depois de reservar as contas essenciais, considere separar uma parte do resultado para sua reserva. " else "Como as despesas igualam ou superam as receitas, priorize revisar gastos e vencimentos antes de assumir uma meta de poupança. ") +
-                (goal?.let { "Sua meta '${it.title}' ainda precisa de ${money((it.target - it.saved).coerceAtLeast(0.0))}." } ?: "Você pode cadastrar uma meta para acompanhar seu progresso.")
+            "Neste mês, receitas: ${money(income)}; despesas: ${money(expense)}; resultado: ${money(result)}. " + (if (result > 0) "O resultado registrado é positivo, mas primeiro reserve as contas pendentes (${money(fixed)}). Uma referência conservadora seria guardar apenas parte do que realmente sobrar após despesas essenciais." else "O resultado ainda não está positivo. Antes de fixar uma meta de poupança, revise despesas variáveis, vencimentos e possíveis lançamentos ausentes.") + (goal?.let { " Sua meta '${it.title}' precisa de ${money((it.target - it.saved).coerceAtLeast(0.0))} para ser concluída." } ?: " Você pode cadastrar uma meta para acompanhar o progresso.")
         }
-        q.contains("onde") || q.contains("categoria") || q.contains("gasto") -> {
-            val biggest = categories.firstOrNull()
-            if (biggest == null) "Ainda não há despesas registradas neste mês. Cadastre suas compras para eu identificar suas principais categorias."
-            else "Sua maior categoria neste mês é ${biggest.first}, com ${money(biggest.second)}. " + (if (alerts.isNotEmpty()) "Pontos de atenção: ${alerts.joinToString(" ")}" else "Uma forma de economizar é escolher uma categoria flexível e definir um limite realista para o restante do mês.")
-        }
-        q.contains("conta") || q.contains("fixa") || q.contains("vencimento") -> "Você cadastrou ${recurring.size} contas fixas. As que ainda não foram marcadas como pagas somam ${money(fixed)} neste mês. Marque cada conta como paga quando quitar para manter a estimativa atualizada."
-        q.contains("orçamento") || q.contains("limite") -> if (alerts.isEmpty()) "Não identifiquei limites estourados com os dados cadastrados. Defina orçamentos nas categorias mais importantes para receber orientações melhores." else "Atenção a estes orçamentos: ${alerts.joinToString(" ")} Vale pausar compras não essenciais nessas categorias e revisar o restante do mês."
-        else -> "Resumo de ${monthLabel(month)}: receitas ${money(income)}, despesas ${money(expense)} e resultado ${money(income - expense)}. Seu saldo total registrado é ${money(balance)}. " + (if (alerts.isNotEmpty()) "Atenção: ${alerts.joinToString(" ")}" else "Cadastre suas contas fixas e limites por categoria para eu ajudar com mais precisão.")
+        normalized.contains("projec") || normalized.contains("previs") || normalized.contains("fim do mes") -> "Até agora, as despesas registradas somam ${money(expense)}. Projetando o ritmo médio de ${money(if (elapsedDays > 0) expense / elapsedDays else 0.0)} por dia para ${daysInMonth} dias, o total estimado seria ${money(projected)}. É uma projeção simples, não uma garantia: contas que ainda vão vencer e gastos irregulares podem alterar bastante o resultado."
+        normalized.contains("receita") || normalized.contains("ganh") || normalized.contains("entrada") -> "As receitas registradas em ${monthLabel(month)} somam ${money(income)} e as despesas ${money(expense)}. O resultado é ${money(income - expense)}. A análise considera apenas movimentações cadastradas no aplicativo."
+        else -> "Resumo de ${monthLabel(month)}: ${money(income)} em receitas, ${money(expense)} em despesas e resultado de ${money(income - expense)}. As contas fixas não marcadas como pagas somam ${money(fixed)}. Você também pode perguntar, por exemplo: 'posso gastar R$ 100?', 'compare com o mês passado', 'quanto gastei com Alimentação?', 'como está meu orçamento?' ou 'projete meus gastos até o fim do mês'."
     }
 }
 
@@ -394,38 +422,51 @@ private fun financialAnswer(question: String, month: String, moves: List<Move>, 
     val income = monthly.filter { it.type == "Receita" }.sumOf { it.amount }
     val expense = monthly.filter { it.type == "Despesa" }.sumOf { it.amount }
     val fixed = recurring.filter { month !in it.paidMonths }.sumOf { it.amount }
+    val result = income - expense
+    val insight = when {
+        expense > income -> "As despesas superam as receitas registradas em ${money(expense - income)}."
+        budgets.any { (category, limit) -> limit > 0 && monthly.filter { it.type == "Despesa" && it.category.equals(category, true) }.sumOf { it.amount } >= limit } -> "Pelo menos uma categoria já atingiu ou ultrapassou o orçamento."
+        fixed > 0 -> "Reserve ${money(fixed)} para as contas fixas ainda não marcadas como pagas."
+        result > 0 -> "O resultado do mês está positivo em ${money(result)}. Confira os vencimentos antes de separar uma reserva."
+        else -> "Registre suas movimentações para receber análises mais específicas."
+    }
     fun ask(question: String) { if (question.isNotBlank()) { messages.add(AdviceMessage(question.trim(), financialAnswer(question, month, moves, recurring, goals, budgets, balance))); input = "" } }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(GreenDeep), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Lightbulb, null, tint = Green, modifier = Modifier.size(26.dp)) }
+            Box(Modifier.size(50.dp).clip(RoundedCornerShape(17.dp)).background(GreenDeep), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Lightbulb, null, tint = Green, modifier = Modifier.size(27.dp)) }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) { Text("Seu assistente financeiro", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Orientações baseadas nos seus registros", color = Muted, fontSize = 11.sp) }
-            Surface(color = GreenDeep, shape = CircleShape) { Text("GRÁTIS", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) }
+            Column(Modifier.weight(1f)) { Text("Cofre Inteligente", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Txt); Text("Seu dinheiro, analisado com contexto", color = Muted, fontSize = 11.sp) }
+            Surface(color = GreenDeep, shape = CircleShape) { Text("LOCAL", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) }
         }
-        Surface(color = Card, shape = RoundedCornerShape(22.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Visão do mês", fontWeight = FontWeight.Bold); Text(monthLabel(month), color = Muted, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Receitas", if (hidden) "••••" else money(income), Green, Modifier.weight(1f)); AdviceMetric("Despesas", if (hidden) "••••" else money(expense), Red, Modifier.weight(1f)) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Saldo total", if (hidden) "••••" else money(balance), Blue, Modifier.weight(1f)); AdviceMetric("Contas a reservar", if (hidden) "••••" else money(fixed), Orange, Modifier.weight(1f)) }
+        Surface(color = Green, shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Insights, null, tint = Color.White); Spacer(Modifier.width(8.dp)); Text("INSIGHT DO MÊS", color = Color.White.copy(alpha = .8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) }
+                Text(insight, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, lineHeight = 23.sp)
+                Text("${monthLabel(month)} · análise dos lançamentos cadastrados", color = Color.White.copy(alpha = .8f), fontSize = 10.sp)
             }
         }
-        Surface(color = Panel, shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
-            Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("O que você quer entender?", fontWeight = FontWeight.SemiBold)
-                listOf("Posso gastar R$ 100 hoje?", "Onde estou gastando mais?", "Como posso economizar?", "Quais contas preciso reservar?", "Estou estourando algum orçamento?").forEach { suggestion ->
-                    Surface(Modifier.fillMaxWidth().clickable { ask(suggestion) }, color = Card, shape = RoundedCornerShape(13.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
-                        Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.ChatBubbleOutline, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(9.dp)); Text(suggestion, modifier = Modifier.weight(1f), fontSize = 12.sp); Icon(Icons.Filled.ChevronRight, null, tint = Muted, modifier = Modifier.size(17.dp)) }
-                    }
-                }
+        Surface(color = Panel, shape = RoundedCornerShape(22.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Panorama financeiro", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Receitas", if (hidden) "••••" else money(income), Green, Modifier.weight(1f)); AdviceMetric("Despesas", if (hidden) "••••" else money(expense), Red, Modifier.weight(1f)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Resultado", if (hidden) "••••" else money(result), if (result >= 0) Green else Red, Modifier.weight(1f)); AdviceMetric("A reservar", if (hidden) "••••" else money(fixed), Orange, Modifier.weight(1f)) }
+            }
+        }
+        Text("Perguntas rápidas", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        val suggestions = listOf("Posso gastar R$ 100 hoje?", "Compare minhas despesas com o mês passado", "Onde estou gastando mais?", "Projete meus gastos até o fim do mês", "Quais contas preciso reservar?", "Como posso economizar?")
+        suggestions.chunked(2).forEach { pair -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { pair.forEach { suggestion -> Surface(Modifier.weight(1f).clickable { ask(suggestion) }, color = Panel, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.ChatBubbleOutline, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(suggestion, modifier = Modifier.weight(1f), fontSize = 11.sp, lineHeight = 15.sp); Icon(Icons.Filled.ChevronRight, null, tint = Muted, modifier = Modifier.size(15.dp)) } } } } }
+        Surface(color = Panel, shape = RoundedCornerShape(22.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("Converse com o Cofre", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Ex.: quanto gastei com alimentação?", fontSize = 12.sp, color = Muted) }, trailingIcon = { IconButton(onClick = { ask(input) }) { Icon(Icons.Filled.Send, "Enviar pergunta", tint = Green) } }, shape = RoundedCornerShape(17.dp), colors = fieldColors(), minLines = 1, maxLines = 3)
+                Text("Entende valores, categorias, tendências, limites e contas fixas. Seus dados permanecem no aparelho.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             }
         }
         if (messages.isNotEmpty()) {
-            Text("Sua conversa", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            messages.reversed().forEach { message -> Surface(color = Card, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(message.question, color = Green, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Divider(color = Border); Text(message.answer, color = Txt, fontSize = 12.sp, lineHeight = 18.sp) } } }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text("Análises recentes", fontWeight = FontWeight.Bold, fontSize = 16.sp); Spacer(Modifier.weight(1f)); TextButton(onClick = { messages.clear() }) { Text("Limpar", color = Muted) } }
+            messages.reversed().forEach { message -> Surface(color = Panel, shape = RoundedCornerShape(19.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Lightbulb, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(7.dp)); Text(message.title, color = Txt, fontWeight = FontWeight.Bold, fontSize = 12.sp) }; Text(message.question, color = Green, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Divider(color = Border); Text(message.answer, color = Txt, fontSize = 12.sp, lineHeight = 18.sp) } } }
         }
-        OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Pergunte sobre seu dinheiro...", fontSize = 12.sp, color = Muted) }, trailingIcon = { IconButton(onClick = { ask(input) }) { Icon(Icons.Filled.Send, "Enviar pergunta", tint = Green) } }, shape = RoundedCornerShape(17.dp), colors = fieldColors())
-        Text("Funciona localmente e sem API paga. Esta primeira versão usa regras financeiras e seus lançamentos, não um modelo generativo. As respostas são estimativas e dependem dos dados cadastrados.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
     }
 }
 
