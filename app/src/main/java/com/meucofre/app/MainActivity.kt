@@ -54,7 +54,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
 import kotlin.math.max
 
 private val Bg = Color(0xFF0B120E)
@@ -72,17 +71,11 @@ private val Border = Color(0xFF29392F)
 private val localeBR = Locale("pt", "BR")
 
 private fun money(v: Double): String = NumberFormat.getCurrencyInstance(localeBR).format(v)
-private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-private fun currentMonth(): String = today().take(7)
+private fun currentMonth(): String = todayIsoDate().take(7)
 private fun monthLabel(key: String): String = try { SimpleDateFormat("MMMM 'de' yyyy", localeBR).format(SimpleDateFormat("yyyy-MM", Locale.US).parse(key)!!).replaceFirstChar { it.uppercase() } } catch (_: Exception) { key }
-private fun id(): String = UUID.randomUUID().toString()
 private fun parseMoney(s: String): Double? = s.trim().replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".").toDoubleOrNull()?.takeIf { it > 0 }
 private fun sha(s: String): String = MessageDigest.getInstance("SHA-256").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
-private data class Move(val id: String = id(), val title: String, val amount: Double, val type: String, val category: String, val date: String = today(), val account: String, val destination: String = "")
-private data class Account(val id: String = id(), val name: String, val type: String, val initial: Double = 0.0)
-private data class Recurring(val id: String = id(), val title: String, val amount: Double, val day: Int, val category: String, val account: String, val paidMonths: Set<String> = emptySet())
-private data class Goal(val id: String = id(), val title: String, val target: Double, val saved: Double = 0.0)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -145,9 +138,10 @@ class MainActivity : ComponentActivity() {
         return
     }
     val monthMoves = moves.filter { it.date.startsWith(month) }
-    val income = monthMoves.filter { it.type == "Receita" }.sumOf { it.amount }
-    val expense = monthMoves.filter { it.type == "Despesa" }.sumOf { it.amount }
-    val totalBalance = accounts.sumOf { account -> account.initial + moves.filter { it.account == account.id }.sumOf { m -> when (m.type) { "Receita" -> m.amount; "Despesa" -> -m.amount; "Transferência" -> -m.amount; else -> 0.0 } } + moves.filter { it.type == "Transferência" && it.destination == account.id }.sumOf { it.amount } }
+    val monthSummary = calculateMonthlySummary(moves, month)
+    val income = monthSummary.income
+    val expense = monthSummary.expense
+    val totalBalance = calculateTotalBalance(accounts, moves)
     Scaffold(containerColor = Bg, bottomBar = {
         NavigationBar(containerColor = Panel, contentColor = Muted, tonalElevation = 0.dp) {
             listOf(Triple("Início", Icons.Filled.Home, "Início"), Triple("Movimentos", Icons.Filled.SwapHoriz, "Movimentos"), Triple("Contas", Icons.Filled.AccountBalanceWallet, "Contas"), Triple("Relatórios", Icons.Filled.Insights, "Relatórios"), Triple("Mais", Icons.Filled.GridView, "Mais")).forEach { (label, icon, destination) ->
@@ -175,7 +169,7 @@ class MainActivity : ComponentActivity() {
                         onImport = { title, amount, account ->
                             val parsed = parseMoney(amount)
                             if (parsed != null && title.isNotBlank() && account.isNotBlank()) {
-                                moves.add(0, Move(title = title, amount = parsed, type = "Despesa", category = "Compras", date = today(), account = account))
+                                moves.add(0, Move(title = title, amount = parsed, type = "Despesa", category = "Compras", date = todayIsoDate(), account = account))
                                 WalletNotificationStore.removeFirst(context)
                                 pendingWalletJson = WalletNotificationStore.firstPending(context)
                                 toast = "Compra adicionada ao Meu Cofre."
@@ -452,7 +446,7 @@ private fun financialAnswer(question: String, month: String, moves: List<Move>, 
 private fun shiftMonth(month: String, delta: Int): String { val cal = Calendar.getInstance(); val parsed = try { SimpleDateFormat("yyyy-MM", Locale.US).parse(month) } catch (_: Exception) { null }; if (parsed != null) cal.time = parsed; cal.add(Calendar.MONTH, delta); return SimpleDateFormat("yyyy-MM", Locale.US).format(cal.time) }
 
 @Composable private fun MoveDialog(existing: Move?, accounts: List<Account>, onDismiss: () -> Unit, onSave: (String, Double, String, String, String, String, String) -> Unit) {
-    var title by remember(existing) { mutableStateOf(existing?.title ?: "") }; var amount by remember(existing) { mutableStateOf(existing?.amount?.toString()?.replace('.', ',') ?: "") }; var type by remember(existing) { mutableStateOf(existing?.type ?: "Despesa") }; var category by remember(existing) { mutableStateOf(existing?.category ?: "Alimentação") }; var date by remember(existing) { mutableStateOf(existing?.date ?: today()) }; var account by remember(existing) { mutableStateOf(existing?.account ?: accounts.firstOrNull()?.id ?: "") }; var destination by remember(existing) { mutableStateOf(existing?.destination ?: accounts.firstOrNull { it.id != account }?.id ?: "") }; var error by remember { mutableStateOf("") }
+    var title by remember(existing) { mutableStateOf(existing?.title ?: "") }; var amount by remember(existing) { mutableStateOf(existing?.amount?.toString()?.replace('.', ',') ?: "") }; var type by remember(existing) { mutableStateOf(existing?.type ?: "Despesa") }; var category by remember(existing) { mutableStateOf(existing?.category ?: "Alimentação") }; var date by remember(existing) { mutableStateOf(existing?.date ?: todayIsoDate()) }; var account by remember(existing) { mutableStateOf(existing?.account ?: accounts.firstOrNull()?.id ?: "") }; var destination by remember(existing) { mutableStateOf(existing?.destination ?: accounts.firstOrNull { it.id != account }?.id ?: "") }; var error by remember { mutableStateOf("") }
     FormDialog(if (existing == null) "Nova movimentação" else "Editar movimentação", onDismiss, { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { Field(title, { title = it }, "Descrição"); Field(amount, { amount = it }, "Valor (R$)", KeyboardType.Decimal); ChoiceRow("Tipo", listOf("Despesa", "Receita", "Transferência"), type) { type = it }; ChoiceRow("Categoria", listOf("Alimentação", "Moradia", "Transporte", "Saúde", "Lazer", "Salário", "Compras", "Educação", "Contas", "Outros"), category) { category = it }; Field(date, { date = it }, "Data (AAAA-MM-DD)"); ChoiceRow("Conta", accounts.map { it.name }, accounts.firstOrNull { it.id == account }?.name ?: "") { account = accounts.firstOrNull { a -> a.name == it }?.id ?: account }; if (type == "Transferência") ChoiceRow("Conta de destino", accounts.filter { it.id != account }.map { it.name }, accounts.firstOrNull { it.id == destination }?.name ?: "") { destination = accounts.firstOrNull { a -> a.name == it }?.id ?: destination }; if (error.isNotBlank()) Text(error, color = Red, fontSize = 11.sp); Button(onClick = { val value = parseMoney(amount); if (title.isBlank() || value == null) error = "Informe uma descrição e um valor válido." else if (date.length != 10) error = "Use a data no formato AAAA-MM-DD." else if (type == "Transferência" && (destination.isBlank() || destination == account)) error = "Escolha uma conta de destino diferente." else onSave(title.trim(), value, type, category, date, account, if (type == "Transferência") destination else "") }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Bg)) { Text("Salvar movimentação") } } })
 }
 
@@ -474,8 +468,8 @@ private fun accountsToJson(list: List<Account>) = JSONArray().apply { list.forEa
 private fun recurringToJson(list: List<Recurring>) = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("title", it.title).put("amount", it.amount).put("day", it.day).put("category", it.category).put("account", it.account).put("paid", JSONArray(it.paidMonths.toList()))) } }.toString()
 private fun goalsToJson(list: List<Goal>) = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("title", it.title).put("target", it.target).put("saved", it.saved)) } }.toString()
 private fun budgetsToJson(map: Map<String, Double>) = JSONObject().apply { map.forEach { (k, v) -> put(k, v) } }.toString()
-private fun loadMoves(p: android.content.SharedPreferences): List<Move> = try { val a = JSONArray(p.getString("movimentos", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Move(o.optString("id", id()), o.optString("title"), o.optDouble("amount"), o.optString("type", "Despesa"), o.optString("category", "Outros"), o.optString("date", today()), o.optString("account"), o.optString("destination")) } } catch (_: Exception) { emptyList() }
-private fun loadAccounts(p: android.content.SharedPreferences): List<Account> = try { val a = JSONArray(p.getString("contas", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Account(o.optString("id", id()), o.optString("name"), o.optString("type"), o.optDouble("initial")) } } catch (_: Exception) { emptyList() }
-private fun loadRecurring(p: android.content.SharedPreferences): List<Recurring> = try { val a = JSONArray(p.getString("recorrencias", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); val paid = o.optJSONArray("paid") ?: JSONArray(); Recurring(o.optString("id", id()), o.optString("title"), o.optDouble("amount"), o.optInt("day", 10), o.optString("category"), o.optString("account"), (0 until paid.length()).map { i -> paid.optString(i) }.toSet()) } } catch (_: Exception) { emptyList() }
-private fun loadGoals(p: android.content.SharedPreferences): List<Goal> = try { val a = JSONArray(p.getString("metas", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Goal(o.optString("id", id()), o.optString("title"), o.optDouble("target"), o.optDouble("saved")) } } catch (_: Exception) { emptyList() }
+private fun loadMoves(p: android.content.SharedPreferences): List<Move> = try { val a = JSONArray(p.getString("movimentos", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Move(o.optString("id", newFinanceId()), o.optString("title"), o.optDouble("amount"), o.optString("type", "Despesa"), o.optString("category", "Outros"), o.optString("date", todayIsoDate()), o.optString("account"), o.optString("destination")) } } catch (_: Exception) { emptyList() }
+private fun loadAccounts(p: android.content.SharedPreferences): List<Account> = try { val a = JSONArray(p.getString("contas", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Account(o.optString("id", newFinanceId()), o.optString("name"), o.optString("type"), o.optDouble("initial")) } } catch (_: Exception) { emptyList() }
+private fun loadRecurring(p: android.content.SharedPreferences): List<Recurring> = try { val a = JSONArray(p.getString("recorrencias", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); val paid = o.optJSONArray("paid") ?: JSONArray(); Recurring(o.optString("id", newFinanceId()), o.optString("title"), o.optDouble("amount"), o.optInt("day", 10), o.optString("category"), o.optString("account"), (0 until paid.length()).map { i -> paid.optString(i) }.toSet()) } } catch (_: Exception) { emptyList() }
+private fun loadGoals(p: android.content.SharedPreferences): List<Goal> = try { val a = JSONArray(p.getString("metas", "[]")); (0 until a.length()).map { val o = a.getJSONObject(it); Goal(o.optString("id", newFinanceId()), o.optString("title"), o.optDouble("target"), o.optDouble("saved")) } } catch (_: Exception) { emptyList() }
 private fun loadBudgets(p: android.content.SharedPreferences): Map<String, Double> = try { val o = JSONObject(p.getString("orcamentos", "{}")); o.keys().asSequence().associateWith { o.optDouble(it) } } catch (_: Exception) { emptyMap() }
