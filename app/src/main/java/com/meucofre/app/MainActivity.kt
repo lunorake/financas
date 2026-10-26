@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -50,6 +52,9 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
+import java.net.HttpURLConnection
+import java.net.URL
+import java.io.OutputStreamWriter
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -179,7 +184,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onDismissPending = { WalletNotificationStore.removeFirst(context); pendingWalletJson = WalletNotificationStore.firstPending(context) }
                     )
-                    "Assistente" -> FinancialAssistantScreen(month, moves, accounts, recurring, goals, budgets.toMap(), totalBalance, hideBalance)
+                    "Assistente" -> FinancialAssistantScreen(context, month, moves, accounts, recurring, goals, budgets.toMap(), totalBalance, hideBalance)
                     else -> MoreScreen(onSelect = { tab = it }, recurringCount = recurring.size, goalsCount = goals.size, budgetsCount = budgets.size)
                 }
             }
@@ -415,8 +420,13 @@ private fun financialAnswer(question: String, month: String, moves: List<Move>, 
     }
 }
 
-@Composable private fun FinancialAssistantScreen(month: String, moves: List<Move>, accounts: List<Account>, recurring: List<Recurring>, goals: List<Goal>, budgets: Map<String, Double>, balance: Double, hidden: Boolean) {
+@Composable private fun FinancialAssistantScreen(context: Context, month: String, moves: List<Move>, accounts: List<Account>, recurring: List<Recurring>, goals: List<Goal>, budgets: Map<String, Double>, balance: Double, hidden: Boolean) {
     var input by remember { mutableStateOf("") }
+    val prefs = remember { context.getSharedPreferences("meu_cofre_premium", Context.MODE_PRIVATE) }
+    var apiKey by remember { mutableStateOf(prefs.getString("gemini_api_key", "") ?: "") }
+    var showKeySetup by remember { mutableStateOf(apiKey.isBlank()) }
+    var loading by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
     val messages = remember { mutableStateListOf<AdviceMessage>() }
     val monthly = moves.filter { it.date.startsWith(month) }
     val income = monthly.filter { it.type == "Receita" }.sumOf { it.amount }
@@ -430,13 +440,35 @@ private fun financialAnswer(question: String, month: String, moves: List<Move>, 
         result > 0 -> "O resultado do mês está positivo em ${money(result)}. Confira os vencimentos antes de separar uma reserva."
         else -> "Registre suas movimentações para receber análises mais específicas."
     }
-    fun ask(question: String) { if (question.isNotBlank()) { messages.add(AdviceMessage(question.trim(), financialAnswer(question, month, moves, recurring, goals, budgets, balance))); input = "" } }
+    fun ask(question: String) {
+        if (question.isBlank() || loading) return
+        if (apiKey.isBlank()) { status = "Configure sua chave gratuita do Gemini para conversar com a IA generativa."; showKeySetup = true; return }
+        val q = question.trim()
+        input = ""
+        loading = true
+        status = "A IA está analisando seus dados..."
+        val contextJson = JSONObject().apply {
+            put("mes", monthLabel(month)); put("saldo_total", balance)
+            put("movimentacoes_do_mes", JSONArray().apply { moves.filter { it.date.startsWith(month) }.takeLast(150).forEach { m -> put(JSONObject().put("descricao", m.title).put("valor", m.amount).put("tipo", m.type).put("categoria", m.category).put("data", m.date)) } })
+            put("contas_fixas_pendentes", JSONArray().apply { recurring.filter { month !in it.paidMonths }.forEach { r -> put(JSONObject().put("nome", r.title).put("valor", r.amount).put("vencimento_dia", r.day).put("categoria", r.category)) } })
+            put("metas", JSONArray().apply { goals.forEach { g -> put(JSONObject().put("nome", g.title).put("objetivo", g.target).put("guardado", g.saved)) } })
+            put("orcamentos", JSONObject().apply { budgets.forEach { (k,v) -> put(k,v) } })
+        }.toString()
+        Thread {
+            val answer = try { callGemini(apiKey.trim(), q, contextJson) } catch (e: Exception) { "Não consegui acessar a IA agora. Verifique sua conexão e a chave do Gemini. Detalhe: ${e.message ?: "erro de conexão"}" }
+            Handler(Looper.getMainLooper()).post {
+                messages.add(AdviceMessage(q, answer, "Resposta da IA generativa"))
+                loading = false
+                status = if (answer.startsWith("Não consegui acessar")) "Falha na conexão. Confira a chave e tente novamente." else "Resposta gerada pelo Gemini. Confira os números antes de tomar decisões."
+            }
+        }.start()
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(50.dp).clip(RoundedCornerShape(17.dp)).background(GreenDeep), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Lightbulb, null, tint = Green, modifier = Modifier.size(27.dp)) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) { Text("Cofre Inteligente", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Txt); Text("Seu dinheiro, analisado com contexto", color = Muted, fontSize = 11.sp) }
-            Surface(color = GreenDeep, shape = CircleShape) { Text("LOCAL", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) }
+            Surface(color = GreenDeep, shape = CircleShape) { Text("IA", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) }
         }
         Surface(color = Green, shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -452,14 +484,29 @@ private fun financialAnswer(question: String, month: String, moves: List<Move>, 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { AdviceMetric("Resultado", if (hidden) "••••" else money(result), if (result >= 0) Green else Red, Modifier.weight(1f)); AdviceMetric("A reservar", if (hidden) "••••" else money(fixed), Orange, Modifier.weight(1f)) }
             }
         }
+        Surface(color = Panel, shape = RoundedCornerShape(18.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.AutoAwesome, null, tint = Green); Spacer(Modifier.width(8.dp)); Text("IA generativa Gemini", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); TextButton(onClick = { showKeySetup = !showKeySetup }) { Text(if (showKeySetup) "Fechar" else "Configurar", color = Green) } }
+                Text("As respostas são geradas por IA usando os dados financeiros que o app enviar na pergunta.", color = Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                if (showKeySetup) {
+                    OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Chave de API do Gemini") }, placeholder = { Text("Cole sua chave aqui") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(13.dp), colors = fieldColors())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { prefs.edit().putString("gemini_api_key", apiKey.trim()).apply(); showKeySetup = false; status = if (apiKey.isBlank()) "Chave removida." else "Chave salva neste aparelho." }, colors = ButtonDefaults.buttonColors(containerColor = Green)) { Text("Salvar chave") }
+                        TextButton(onClick = { apiKey = ""; prefs.edit().remove("gemini_api_key").apply(); status = "Chave removida." }) { Text("Apagar", color = Red) }
+                    }
+                    Text("Obtenha uma chave em aistudio.google.com. Não coloque sua chave em código público. A chave fica salva localmente no aparelho; as perguntas e o resumo financeiro são enviados ao Google para gerar respostas.", color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                }
+                if (status.isNotBlank()) Text(status, color = if (status.startsWith("Falha") || status.startsWith("Não")) Red else Muted, fontSize = 11.sp)
+            }
+        }
         Text("Perguntas rápidas", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         val suggestions = listOf("Posso gastar R$ 100 hoje?", "Compare minhas despesas com o mês passado", "Onde estou gastando mais?", "Projete meus gastos até o fim do mês", "Quais contas preciso reservar?", "Como posso economizar?")
         suggestions.chunked(2).forEach { pair -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { pair.forEach { suggestion -> Surface(Modifier.weight(1f).clickable { ask(suggestion) }, color = Panel, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.ChatBubbleOutline, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(suggestion, modifier = Modifier.weight(1f), fontSize = 11.sp, lineHeight = 15.sp); Icon(Icons.Filled.ChevronRight, null, tint = Muted, modifier = Modifier.size(15.dp)) } } } } }
         Surface(color = Panel, shape = RoundedCornerShape(22.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) {
             Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Text("Converse com o Cofre", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Ex.: quanto gastei com alimentação?", fontSize = 12.sp, color = Muted) }, trailingIcon = { IconButton(onClick = { ask(input) }) { Icon(Icons.Filled.Send, "Enviar pergunta", tint = Green) } }, shape = RoundedCornerShape(17.dp), colors = fieldColors(), minLines = 1, maxLines = 3)
-                Text("Entende valores, categorias, tendências, limites e contas fixas. Seus dados permanecem no aparelho.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.fillMaxWidth(), enabled = !loading, placeholder = { Text("Ex.: como posso economizar este mês?", fontSize = 12.sp, color = Muted) }, trailingIcon = { IconButton(onClick = { ask(input) }, enabled = !loading) { if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Filled.Send, "Enviar pergunta", tint = Green) } }, shape = RoundedCornerShape(17.dp), colors = fieldColors(), minLines = 1, maxLines = 3)
+                Text("A IA usa os lançamentos do mês, contas pendentes, metas e orçamentos. Ao perguntar, esse resumo é enviado ao Google Gemini.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             }
         }
         if (messages.isNotEmpty()) {
@@ -503,6 +550,42 @@ private fun shiftMonth(month: String, delta: Int): String { val cal = Calendar.g
 @Composable private fun Field(value: String, onValue: (String) -> Unit, label: String, keyboard: KeyboardType = KeyboardType.Text, password: Boolean = false) { OutlinedTextField(value, onValue, Modifier.fillMaxWidth(), label = { Text(label, fontSize = 12.sp) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = keyboard), visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, shape = RoundedCornerShape(14.dp), colors = fieldColors()) }
 @Composable private fun ChoiceRow(label: String, options: List<String>, selected: String, onSelect: (String) -> Unit) { var expanded by remember { mutableStateOf(false) }; Column { Text(label, color = Muted, fontSize = 11.sp); Box { Surface(Modifier.fillMaxWidth().clickable { expanded = true }, color = Panel, shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Border)) { Row(Modifier.padding(horizontal = 13.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) { Text(selected.ifBlank { "Selecione" }, Modifier.weight(1f), fontSize = 13.sp); Icon(Icons.Filled.ExpandMore, null, tint = Muted) } }; DropdownMenu(expanded, { expanded = false }, modifier = Modifier.background(Card)) { options.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { onSelect(option); expanded = false }) } } } } }
 @Composable private fun fieldColors() = OutlinedTextFieldDefaults.colors(focusedBorderColor = Green, unfocusedBorderColor = Border, focusedLabelColor = Green, unfocusedLabelColor = Muted, focusedTextColor = Txt, unfocusedTextColor = Txt, cursorColor = Green, focusedContainerColor = Panel, unfocusedContainerColor = Panel)
+
+
+private fun callGemini(apiKey: String, question: String, financialContext: String): String {
+    val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${java.net.URLEncoder.encode(apiKey, "UTF-8")}")
+    val prompt = """Você é o Cofre Inteligente, um assistente de educação e organização financeira pessoal que fala português brasileiro de forma acolhedora, clara e prática. Responda à pergunta usando os dados JSON abaixo como fonte principal. Nunca invente valores, movimentações ou contas; se faltarem dados, diga isso. Diferencie saldo de resultado mensal, não trate contas pendentes como já pagas, explique cálculos de forma simples e evite recomendar investimentos específicos ou garantir resultados. Se perguntarem se podem fazer uma compra, estime com cautela e ressalte que os lançamentos podem estar incompletos. Não solicite senhas bancárias, tokens ou dados sensíveis. Seja direto, com listas curtas quando ajudarem.
+
+DADOS FINANCEIROS DO APLICATIVO (JSON):
+$financialContext
+
+PERGUNTA DO USUÁRIO:
+$question"""
+    val payload = JSONObject().put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+        .put("generationConfig", JSONObject().put("temperature", 0.4).put("maxOutputTokens", 900))
+    val connection = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "POST"
+        connectTimeout = 20000
+        readTimeout = 45000
+        doOutput = true
+        setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+    }
+    try {
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(payload.toString()) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val body = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (code !in 200..299) {
+            val detail = try { JSONObject(body).optJSONObject("error")?.optString("message") ?: "HTTP $code" } catch (_: Exception) { "HTTP $code" }
+            throw IllegalStateException(detail.take(220))
+        }
+        val root = JSONObject(body)
+        val candidates = root.optJSONArray("candidates") ?: throw IllegalStateException("A IA não retornou uma resposta. Tente novamente.")
+        val parts = candidates.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+            ?: throw IllegalStateException("A IA retornou uma resposta vazia.")
+        return (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n\n").ifBlank { "A IA retornou uma resposta vazia. Tente reformular a pergunta." }
+    } finally { connection.disconnect() }
+}
 
 private fun movesToJson(list: List<Move>) = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("title", it.title).put("amount", it.amount).put("type", it.type).put("category", it.category).put("date", it.date).put("account", it.account).put("destination", it.destination)) } }.toString()
 private fun accountsToJson(list: List<Account>) = JSONArray().apply { list.forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("type", it.type).put("initial", it.initial)) } }.toString()

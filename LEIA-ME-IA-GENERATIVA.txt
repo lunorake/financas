@@ -1,0 +1,24 @@
+MEU COFRE — IA GENERATIVA GEMINI
+
+O que mudou
+- O assistente agora faz chamadas reais à API do Google Gemini (modelo gemini-3.8-flash), em vez de responder apenas por regras locais.
+- Para responder, envia a pergunta e um resumo financeiro do mês: movimentações recentes, contas fixas pendentes, metas e orçamentos.
+- O restante do app continua guardando os dados financeiros localmente no aparelho.
+
+Como ativar
+1. Substitua os arquivos do seu repositório GitHub pelos arquivos deste ZIP (não apague o repositório inteiro; substitua os arquivos do projeto).
+2. Faça commit e push. Acesse Actions no GitHub e aguarde o workflow gerar o APK.
+3. Instale/abra o app e entre em Assistente financeiro.
+4. Toque em Configurar e cole sua chave da API Gemini.
+5. Crie/consulte uma chave em https://aistudio.google.com/ e siga as instruções do Google.
+6. Salve a chave e faça uma pergunta.
+
+Privacidade e segurança
+- A chave é salva nas preferências locais do app, sem criptografia dedicada. Não compartilhe o aparelho desbloqueado e remova a chave se não for mais usar.
+- Não coloque a chave no código-fonte nem no GitHub.
+- Ao enviar uma pergunta, o resumo financeiro incluído no prompt é transmitido ao Google Gemini para gerar a resposta. Não envie dados que não queira compartilhar com o provedor.
+- Para um aplicativo distribuído ao público, o mais seguro é colocar a chamada da API em um backend próprio, com autenticação e limites de uso. Chaves usadas diretamente no aplicativo podem ser extraídas por alguém com conhecimento técnico.
+- A disponibilidade, limites e possíveis cobranças da API dependem das regras atuais da conta Google. Confira o AI Studio antes de usar.
+
+Observação
+O ZIP foi validado quanto à integridade do arquivo, mas não foi possível executar uma compilação Android completa neste ambiente. Use o GitHub Actions e, se surgir erro, envie o log completo da etapa que falhou.
